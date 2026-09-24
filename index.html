@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Sphere Arena Simulation</title>
+  <style>
+    body {
+      margin: 0;
+      background: #222;
+      color: #eee;
+      font-family: sans-serif;
+    }
+    #ui {
+      padding: 8px;
+      background: #333;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    #canvasWrapper {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+    canvas {
+      background: #000;
+      border: 1px solid #555;
+    }
+    label {
+      font-size: 12px;
+    }
+    input {
+      width: 60px;
+    }
+    button {
+      padding: 4px 10px;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+<div id="ui">
+  <label>Players:
+    <input type="number" id="playerCount" value="20" min="2" max="200">
+  </label>
+  <label>Vision (deg):
+    <input type="number" id="visionAngle" value="90" min="10" max="360">
+  </label>
+  <label>Vision Range:
+    <input type="number" id="visionRange" value="120" min="20" max="400">
+  </label>
+  <label>Tick (ms):
+    <input type="number" id="tickMs" value="30" min="5" max="200">
+  </label>
+  <button id="startBtn">Start</button>
+  <span id="status"></span>
+</div>
+<div id="canvasWrapper">
+  <canvas id="gameCanvas" width="800" height="600"></canvas>
+</div>
+
+<script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+<script>
+$(function () {
+  const canvas = document.getElementById('gameCanvas');
+  const ctx = canvas.getContext('2d');
+
+  const grassSize = 32;
+  const obstacles = [];
+  let players = [];
+  let running = false;
+  let timer = null;
+
+  function randRange(min, max) {
+    return Math.random() * (max - min) + min;
+  }
+
+  function randInt(min, max) {
+    return Math.floor(randRange(min, max + 1));
+  }
+
+  function createObstacles() {
+    obstacles.length = 0;
+    const count = 20;
+    for (let i = 0; i < count; i++) {
+      const w = randInt(40, 80);
+      const h = randInt(40, 80);
+      obstacles.push({
+        x: randInt(0, canvas.width - w),
+        y: randInt(0, canvas.height - h),
+        w, h
+      });
+    }
+  }
+
+  function createPlayers(n, visionAngle, visionRange) {
+    players = [];
+    for (let i = 0; i < n; i++) {
+      const radius = randInt(10, 18);
+      players.push({
+        id: i,
+        x: randRange(radius, canvas.width - radius),
+        y: randRange(radius, canvas.height - radius),
+        vx: randRange(-1.5, 1.5),
+        vy: randRange(-1.5, 1.5),
+        radius,
+        health: randInt(60, 100),
+        stamina: randInt(40, 100),
+        strength: randInt(5, 20),
+        agility: randInt(5, 20),
+        visionAngle: visionAngle * Math.PI / 180,
+        visionRange: visionRange,
+        facing: randRange(0, Math.PI * 2),
+        color: randomColor()
+      });
+    }
+  }
+
+  function randomColor() {
+    const r = randInt(80, 255);
+    const g = randInt(80, 255);
+    const b = randInt(80, 255);
+    return `rgb(${r},${g},${b})`;
+  }
+
+  function drawBackground() {
+    // Grass tiles
+    for (let y = 0; y < canvas.height; y += grassSize) {
+      for (let x = 0; x < canvas.width; x += grassSize) {
+        const g = 100 + ((x + y) % 40);
+        ctx.fillStyle = `rgb(0,${g},0)`;
+        ctx.fillRect(x, y, grassSize, grassSize);
+        ctx.strokeStyle = `rgba(0,80,0,0.3)`;
+        ctx.strokeRect(x, y, grassSize, grassSize);
+      }
+    }
+    // Obstacles
+    ctx.fillStyle = '#555';
+    ctx.strokeStyle = '#222';
+    obstacles.forEach(o => {
+      ctx.fillRect(o.x, o.y, o.w, o.h);
+      ctx.strokeRect(o.x, o.y, o.w, o.h);
+    });
+  }
+
+  function drawPlayers() {
+    players.forEach(p => {
+      // Vision cone
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.facing);
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.arc(0, 0, p.visionRange, -p.visionAngle / 2, p.visionAngle / 2);
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(255,255,255,0.05)';
+      ctx.fill();
+      ctx.restore();
+
+      // Player body
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+      ctx.fillStyle = p.color;
+      ctx.fill();
+      ctx.strokeStyle = '#000';
+      ctx.stroke();
+
+      // Health bar
+      const barW = p.radius * 2;
+      const barH = 4;
+      const hpRatio = Math.max(0, p.health) / 100;
+      ctx.fillStyle = '#000';
+      ctx.fillRect(p.x - barW / 2, p.y - p.radius - 8, barW, barH);
+      ctx.fillStyle = hpRatio > 0.5 ? '#0f0' : '#f00';
+      ctx.fillRect(p.x - barW / 2, p.y - p.radius - 8, barW * hpRatio, barH);
+    });
+  }
+
+  function updatePlayers() {
+    players.forEach(p => {
+      // Slight random steering based on agility
+      const jitter = (p.agility / 200) * (Math.random() - 0.5);
+      p.facing += jitter;
+
+      // Move
+      const speed = 1 + p.agility / 40;
+      p.vx = Math.cos(p.facing) * speed;
+      p.vy = Math.sin(p.facing) * speed;
+
+      p.x += p.vx;
+      p.y += p.vy;
+
+      // Bounce off walls
+      if (p.x - p.radius < 0) {
+        p.x = p.radius;
+        p.facing = Math.PI - p.facing;
+      } else if (p.x + p.radius > canvas.width) {
+        p.x = canvas.width - p.radius;
+        p.facing = Math.PI - p.facing;
+      }
+      if (p.y - p.radius < 0) {
+        p.y = p.radius;
+        p.facing = -p.facing;
+      } else if (p.y + p.radius > canvas.height) {
+        p.y = canvas.height - p.radius;
+        p.facing = -p.facing;
+      }
+
+      // Avoid obstacles (simple push out)
+      obstacles.forEach(o => {
+        if (p.x + p.radius > o.x &&
+            p.x - p.radius < o.x + o.w &&
+            p.y + p.radius > o.y &&
+            p.y - p.radius < o.y + o.h) {
+          // Push out in opposite direction
+          if (p.x < o.x) p.x = o.x - p.radius;
+          else if (p.x > o.x + o.w) p.x = o.x + o.w + p.radius;
+          if (p.y < o.y) p.y = o.y - p.radius;
+          else if (p.y > o.y + o.h) p.y = o.y + o.h + p.radius;
+          p.facing += Math.PI / 2 * (Math.random() > 0.5 ? 1 : -1);
+        }
+      });
+    });
+
+    // Interactions: bump damage if in vision
+    for (let i = 0; i < players.length; i++) {
+      for (let j = i + 1; j < players.length; j++) {
+        const a = players[i];
+        const b = players[j];
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        const minDist = a.radius + b.radius;
+
+        if (dist < minDist) {
+          // Check if each can see the other
+          if (canSee(a, b, dx, dy, dist)) {
+            applyDamage(a, b);
+          }
+          if (canSee(b, a, -dx, -dy, dist)) {
+            applyDamage(b, a);
+          }
+
+          // Simple separation
+          const overlap = minDist - dist || 0.01;
+          const nx = dx / dist;
+          const ny = dy / dist;
+          a.x -= nx * overlap / 2;
+          a.y -= ny * overlap / 2;
+          b.x += nx * overlap / 2;
+          b.y += ny * overlap / 2;
+        }
+      }
+    }
+
+    // Remove dead players
+    players = players.filter(p => p.health > 0);
+
+    // End condition
+    if (players.length <= 1 && running) {
+      running = false;
+      clearInterval(timer);
+      const winner = players[0];
+      $('#status').text(
+        winner
+          ? `Winner: #${winner.id} (HP ${Math.round(winner.health)})`
+          : 'No players left.'
+      );
+    } else {
+      $('#status').text(`Players remaining: ${players.length}`);
+    }
+  }
+
+  function canSee(observer, target, dx, dy, dist) {
+    if (dist > observer.visionRange) return false;
+    const angleToTarget = Math.atan2(dy, dx);
+    let diff = angleToTarget - observer.facing;
+    // Normalize angle difference
+    diff = (diff + Math.PI * 3) % (Math.PI * 2) - Math.PI;
+    return Math.abs(diff) <= observer.visionAngle / 2;
+  }
+
+  function applyDamage(attacker, defender) {
+    if (attacker.stamina <= 0) return;
+    const base = attacker.strength;
+    const variance = randRange(-base * 0.3, base * 0.3);
+    const dmg = Math.max(1, base + variance);
+    defender.health -= dmg;
+    attacker.stamina -= 0.5;
+  }
+
+  function tick() {
+    drawBackground();
+    updatePlayers();
+    drawPlayers();
+  }
+
+  $('#startBtn').on('click', function () {
+    const n = parseInt($('#playerCount').val(), 10) || 10;
+    const visionAngle = parseFloat($('#visionAngle').val()) || 90;
+    const visionRange = parseFloat($('#visionRange').val()) || 120;
+    const tickMs = parseInt($('#tickMs').val(), 10) || 30;
+
+    createObstacles();
+    createPlayers(n, visionAngle, visionRange);
+    running = true;
+    $('#status').text(`Players remaining: ${players.length}`);
+    if (timer) clearInterval(timer);
+    timer = setInterval(tick, tickMs);
+  });
+
+  // Initial draw
+  createObstacles();
+  drawBackground();
+});
+</script>
+</body>
+</html>
