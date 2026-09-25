@@ -40,14 +40,13 @@ $(function(){
   let timer = null;
   let globalTick = 0;
 
-  // timing (in ticks, computed from tickMs)
   let stealthDurTicks = 0;
   let stealthCdTicks = 0;
   let enrageDurTicks = 0;
   let enrageCdTicks = 0;
   let mushroomIntervalTicks = 0;
-  let staminaDrainIntervalTicks = 0;   // how often stamina drains
-  let staminaRegenIntervalTicks = 0;   // how often stamina regenerates
+  let staminaDrainIntervalTicks = 0;
+  let staminaRegenIntervalTicks = 0;
 
   function randRange(min,max){ return Math.random()*(max-min)+min; }
   function randInt(min,max){ return Math.floor(randRange(min,max+1)); }
@@ -96,7 +95,6 @@ $(function(){
       const hasMana = Math.random() < 0.20;
       const hasStealth = Math.random() < 0.25;
       const hasEnrage = Math.random() < 0.25;
-
       const manaMax = hasMana ? randInt(40,100) : 0;
 
       players.push({
@@ -132,7 +130,9 @@ $(function(){
         enrageTicksLeft: 0,
         enrageCooldown: 0,
 
-        speedFactor: 1
+        speedFactor: 1,
+
+        lovePartnerId: null
       });
     }
   }
@@ -320,7 +320,7 @@ $(function(){
 
         if(dist < target.radius + s.size*0.5){
           if(!target.isStealthed){
-            target.health -= randInt(10,25);
+            applyDamageDirect(target, randInt(10,25));
           }
           s.active = false;
         }
@@ -347,10 +347,23 @@ $(function(){
     let variance = randRange(-base*0.3, base*0.3);
     let dmg = Math.max(1, base + variance);
 
-    if(attacker.isEnraged) dmg *= 0.25; // 75% less damage
+    if(attacker.isEnraged) dmg *= 0.25;
 
-    defender.health -= dmg;
+    applyDamageDirect(defender, dmg);
     attacker.stamina -= 0.5;
+  }
+
+  function applyDamageDirect(defender, dmg){
+    if(defender.lovePartnerId != null){
+      const partner = players.find(p=>p.id === defender.lovePartnerId);
+      if(partner){
+        const half = dmg * 0.5;
+        defender.health -= half;
+        partner.health -= half;
+        return;
+      }
+    }
+    defender.health -= dmg;
   }
 
   function castSpell(caster, target){
@@ -391,7 +404,14 @@ $(function(){
       if(p.stamina > 100) p.stamina = 100;
       if(p.stamina < 0) p.stamina = 0;
 
-      let speed = (p.stamina < 10) ? 0 : (1 + p.agility/40) * p.speedFactor;
+      let speed = (1 + p.agility/40) * p.speedFactor;
+
+      if(p.stamina <= 10){
+        speed = 0;
+      } else if(p.stamina <= 50){
+        speed *= 0.75;
+      }
+
       if(p.isStealthed) speed *= 0.75;
       if(p.isEnraged) speed *= 1.5;
 
@@ -522,8 +542,17 @@ $(function(){
         }
 
         if(dist < minDist){
-          if(aCanSee) applyDamage(a,b);
-          if(bCanSee) applyDamage(b,a);
+          const loveChance = Math.random();
+          const canLoveA = (a.lovePartnerId === null);
+          const canLoveB = (b.lovePartnerId === null);
+
+          if(loveChance < 0.3 && canLoveA && canLoveB){
+            a.lovePartnerId = b.id;
+            b.lovePartnerId = a.id;
+          } else {
+            if(aCanSee) applyDamage(a,b);
+            if(bCanSee) applyDamage(b,a);
+          }
 
           const overlap = minDist - dist || 0.01;
           const nx = dx / dist;
