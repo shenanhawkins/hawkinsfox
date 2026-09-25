@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Sphere Arena Simulation</title>
+  <title>Sphere Arena Simulation + Mana & Mushrooms</title>
   <style>
     body {
       margin: 0;
@@ -68,6 +68,8 @@ $(function () {
   const grassSize = 32;
   const obstacles = [];
   let players = [];
+  let mushrooms = [];
+  let spells = [];
   let running = false;
   let timer = null;
 
@@ -77,6 +79,13 @@ $(function () {
 
   function randInt(min, max) {
     return Math.floor(randRange(min, max + 1));
+  }
+
+  function randomColor() {
+    const r = randInt(80, 255);
+    const g = randInt(80, 255);
+    const b = randInt(80, 255);
+    return `rgb(${r},${g},${b})`;
   }
 
   function createObstacles() {
@@ -93,10 +102,30 @@ $(function () {
     }
   }
 
+  function createMushrooms() {
+    mushrooms.length = 0;
+    const count = randInt(2, 5);
+    for (let i = 0; i < count; i++) {
+      const x = randInt(40, canvas.width - 40);
+      const y = randInt(40, canvas.height - 40);
+      mushrooms.push({
+        x, y,
+        radius: 0,
+        growTicks: 0,
+        maxRadius: 14,
+        grown: false,
+        alive: true
+      });
+    }
+  }
+
   function createPlayers(n, visionAngle, visionRange) {
     players = [];
+    spells = [];
     for (let i = 0; i < n; i++) {
       const radius = randInt(10, 18);
+      const hasMana = Math.random() < 0.2;
+      const manaMax = hasMana ? randInt(40, 100) : 0;
       players.push({
         id: i,
         x: randRange(radius, canvas.width - radius),
@@ -108,23 +137,20 @@ $(function () {
         stamina: randInt(40, 100),
         strength: randInt(5, 20),
         agility: randInt(5, 20),
+        aggressiveness: randRange(0, 1), // 0 = flee, 1 = hunt
         visionAngle: visionAngle * Math.PI / 180,
         visionRange: visionRange,
         facing: randRange(0, Math.PI * 2),
-        color: randomColor()
+        color: randomColor(),
+        hasMana,
+        manaMax,
+        mana: manaMax,
+        spellCooldown: 0
       });
     }
   }
 
-  function randomColor() {
-    const r = randInt(80, 255);
-    const g = randInt(80, 255);
-    const b = randInt(80, 255);
-    return `rgb(${r},${g},${b})`;
-  }
-
   function drawBackground() {
-    // Grass tiles
     for (let y = 0; y < canvas.height; y += grassSize) {
       for (let x = 0; x < canvas.width; x += grassSize) {
         const g = 100 + ((x + y) % 40);
@@ -134,12 +160,41 @@ $(function () {
         ctx.strokeRect(x, y, grassSize, grassSize);
       }
     }
-    // Obstacles
     ctx.fillStyle = '#555';
     ctx.strokeStyle = '#222';
     obstacles.forEach(o => {
       ctx.fillRect(o.x, o.y, o.w, o.h);
       ctx.strokeRect(o.x, o.y, o.w, o.h);
+    });
+  }
+
+  function drawMushrooms() {
+    mushrooms.forEach(m => {
+      if (!m.alive) return;
+      // stem
+      ctx.save();
+      ctx.translate(m.x, m.y);
+      const r = m.radius;
+      const stemH = r * 1.2;
+      ctx.fillStyle = '#f5e6c8';
+      ctx.beginPath();
+      ctx.roundRect(-r * 0.3, -stemH, r * 0.6, stemH, r * 0.2);
+      ctx.fill();
+      // cap
+      ctx.beginPath();
+      ctx.arc(0, -stemH, r, Math.PI, 0);
+      ctx.fillStyle = '#d00';
+      ctx.fill();
+      // white speckles
+      ctx.fillStyle = '#fff';
+      for (let i = 0; i < 6; i++) {
+        const sx = (Math.random() - 0.5) * r * 1.2;
+        const sy = -stemH - randRange(0, r * 0.6);
+        ctx.beginPath();
+        ctx.arc(sx, sy, r * 0.12, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
     });
   }
 
@@ -169,20 +224,135 @@ $(function () {
       const barW = p.radius * 2;
       const barH = 4;
       const hpRatio = Math.max(0, p.health) / 100;
+      const baseY = p.y - p.radius - 8;
       ctx.fillStyle = '#000';
-      ctx.fillRect(p.x - barW / 2, p.y - p.radius - 8, barW, barH);
+      ctx.fillRect(p.x - barW / 2, baseY, barW, barH);
       ctx.fillStyle = hpRatio > 0.5 ? '#0f0' : '#f00';
-      ctx.fillRect(p.x - barW / 2, p.y - p.radius - 8, barW * hpRatio, barH);
+      ctx.fillRect(p.x - barW / 2, baseY, barW * hpRatio, barH);
+
+      // Mana bar (blue) below health if player has mana
+      if (p.hasMana && p.manaMax > 0) {
+        const manaRatio = Math.max(0, p.mana) / p.manaMax;
+        const manaY = baseY + barH + 2;
+        ctx.fillStyle = '#000';
+        ctx.fillRect(p.x - barW / 2, manaY, barW, barH);
+        ctx.fillStyle = '#00aaff';
+        ctx.fillRect(p.x - barW / 2, manaY, barW * manaRatio, barH);
+      }
     });
   }
 
+  function drawSpells() {
+    spells.forEach(s => {
+      if (!s.active) return;
+      // shadow on ground
+      ctx.save();
+      ctx.globalAlpha = 0.25;
+      ctx.fillStyle = '#000';
+      ctx.beginPath();
+      ctx.moveTo(s.shadow.x + s.shadowSize, s.shadow.y);
+      ctx.lineTo(s.shadow.x - s.shadowSize, s.shadow.y);
+      ctx.lineTo(s.shadow.x, s.shadow.y + s.shadowSize);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+
+      // fiery triangle
+      ctx.save();
+      ctx.translate(s.x, s.y - s.heightOffset);
+      ctx.rotate(s.angle);
+      const size = s.size;
+      const grd = ctx.createLinearGradient(-size, -size, size, size);
+      grd.addColorStop(0, '#ffcc00');
+      grd.addColorStop(0.5, '#ff5500');
+      grd.addColorStop(1, '#aa0000');
+      ctx.fillStyle = grd;
+      ctx.beginPath();
+      ctx.moveTo(0, -size);
+      ctx.lineTo(-size, size);
+      ctx.lineTo(size, size);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    });
+  }
+
+  function updateMushrooms() {
+    mushrooms.forEach(m => {
+      if (!m.alive) return;
+      if (!m.grown) {
+        m.growTicks++;
+        const t = Math.min(1, m.growTicks / 10); // 10 ticks to grow
+        m.radius = m.maxRadius * t;
+        if (t >= 1) m.grown = true;
+      }
+    });
+  }
+
+  function updateSpells() {
+    spells.forEach(s => {
+      if (!s.active) return;
+      s.angle += 0.2;
+      if (s.phase === 'rise') {
+        s.heightOffset += 2;
+        s.shadowSize = s.size * (1 + s.heightOffset / 40);
+        if (s.heightOffset >= 40) {
+          s.phase = 'seek';
+        }
+      } else if (s.phase === 'seek') {
+        const target = players.find(p => p.id === s.targetId);
+        if (!target) {
+          s.active = false;
+          return;
+        }
+        const dx = target.x - s.x;
+        const dy = target.y - (s.y - s.heightOffset);
+        const dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
+        const speed = 4;
+        s.x += (dx / dist) * speed;
+        s.y += (dy / dist) * speed;
+        s.shadow.x = s.x;
+        s.shadow.y = s.y;
+        if (dist < target.radius + s.size * 0.5) {
+          // impact
+          target.health -= randInt(10, 25);
+          s.active = false;
+        }
+      }
+    });
+    spells = spells.filter(s => s.active);
+  }
+
   function updatePlayers() {
+    // AI movement: aggressiveness decides flee vs chase
     players.forEach(p => {
-      // Slight random steering based on agility
+      let closest = null;
+      let closestDist = Infinity;
+      players.forEach(other => {
+        if (other === p) return;
+        const dx = other.x - p.x;
+        const dy = other.y - p.y;
+        const d = Math.sqrt(dx * dx + dy * dy);
+        if (d < closestDist) {
+          closestDist = d;
+          closest = other;
+        }
+      });
+
+      if (closest) {
+        const dx = closest.x - p.x;
+        const dy = closest.y - p.y;
+        const angleTo = Math.atan2(dy, dx);
+        const fleeFactor = 1 - p.aggressiveness;
+        const huntFactor = p.aggressiveness;
+        const desiredAngle = angleTo * huntFactor + (angleTo + Math.PI) * fleeFactor;
+        const diff = ((desiredAngle - p.facing + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
+        p.facing += diff * 0.05; // turn slowly
+      }
+
       const jitter = (p.agility / 200) * (Math.random() - 0.5);
       p.facing += jitter;
 
-      // Move
       const speed = 1 + p.agility / 40;
       p.vx = Math.cos(p.facing) * speed;
       p.vy = Math.sin(p.facing) * speed;
@@ -190,7 +360,7 @@ $(function () {
       p.x += p.vx;
       p.y += p.vy;
 
-      // Bounce off walls
+      // walls
       if (p.x - p.radius < 0) {
         p.x = p.radius;
         p.facing = Math.PI - p.facing;
@@ -206,13 +376,12 @@ $(function () {
         p.facing = -p.facing;
       }
 
-      // Avoid obstacles (simple push out)
+      // obstacles
       obstacles.forEach(o => {
         if (p.x + p.radius > o.x &&
             p.x - p.radius < o.x + o.w &&
             p.y + p.radius > o.y &&
             p.y - p.radius < o.y + o.h) {
-          // Push out in opposite direction
           if (p.x < o.x) p.x = o.x - p.radius;
           else if (p.x > o.x + o.w) p.x = o.x + o.w + p.radius;
           if (p.y < o.y) p.y = o.y - p.radius;
@@ -220,9 +389,11 @@ $(function () {
           p.facing += Math.PI / 2 * (Math.random() > 0.5 ? 1 : -1);
         }
       });
+
+      if (p.spellCooldown > 0) p.spellCooldown--;
     });
 
-    // Interactions: bump damage if in vision
+    // interactions: bump damage + spell casting
     for (let i = 0; i < players.length; i++) {
       for (let j = i + 1; j < players.length; j++) {
         const a = players[i];
@@ -232,8 +403,15 @@ $(function () {
         const dist = Math.sqrt(dx * dx + dy * dy);
         const minDist = a.radius + b.radius;
 
+        // spell casting when target enters FOV of mana player
+        if (a.hasMana && a.mana > 5 && a.spellCooldown === 0 && canSee(a, b, dx, dy, dist)) {
+          castSpell(a, b);
+        }
+        if (b.hasMana && b.mana > 5 && b.spellCooldown === 0 && canSee(b, a, -dx, -dy, dist)) {
+          castSpell(b, a);
+        }
+
         if (dist < minDist) {
-          // Check if each can see the other
           if (canSee(a, b, dx, dy, dist)) {
             applyDamage(a, b);
           }
@@ -241,7 +419,6 @@ $(function () {
             applyDamage(b, a);
           }
 
-          // Simple separation
           const overlap = minDist - dist || 0.01;
           const nx = dx / dist;
           const ny = dy / dist;
@@ -253,10 +430,22 @@ $(function () {
       }
     }
 
-    // Remove dead players
+    // mushrooms contact
+    players.forEach(p => {
+      mushrooms.forEach(m => {
+        if (!m.alive || !m.grown) return;
+        const dx = m.x - p.x;
+        const dy = m.y - p.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < p.radius + m.radius * 0.6) {
+          p.health = Math.min(100, p.health + 25);
+          m.alive = false;
+        }
+      });
+    });
+
     players = players.filter(p => p.health > 0);
 
-    // End condition
     if (players.length <= 1 && running) {
       running = false;
       clearInterval(timer);
@@ -275,7 +464,6 @@ $(function () {
     if (dist > observer.visionRange) return false;
     const angleToTarget = Math.atan2(dy, dx);
     let diff = angleToTarget - observer.facing;
-    // Normalize angle difference
     diff = (diff + Math.PI * 3) % (Math.PI * 2) - Math.PI;
     return Math.abs(diff) <= observer.visionAngle / 2;
   }
@@ -289,9 +477,30 @@ $(function () {
     attacker.stamina -= 0.5;
   }
 
+  function castSpell(caster, target) {
+    caster.mana -= 10;
+    caster.spellCooldown = 40;
+    spells.push({
+      active: true,
+      phase: 'rise',
+      x: caster.x,
+      y: caster.y,
+      size: 12,
+      heightOffset: 0,
+      angle: 0,
+      targetId: target.id,
+      shadow: { x: caster.x, y: caster.y },
+      shadowSize: 10
+    });
+  }
+
   function tick() {
     drawBackground();
+    updateMushrooms();
+    updateSpells();
     updatePlayers();
+    drawMushrooms();
+    drawSpells();
     drawPlayers();
   }
 
@@ -302,6 +511,7 @@ $(function () {
     const tickMs = parseInt($('#tickMs').val(), 10) || 30;
 
     createObstacles();
+    createMushrooms();
     createPlayers(n, visionAngle, visionRange);
     running = true;
     $('#status').text(`Players remaining: ${players.length}`);
@@ -309,9 +519,10 @@ $(function () {
     timer = setInterval(tick, tickMs);
   });
 
-  // Initial draw
   createObstacles();
+  createMushrooms();
   drawBackground();
+  drawMushrooms();
 });
 </script>
 </body>
