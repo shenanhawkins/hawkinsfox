@@ -106,6 +106,7 @@ $(function(){
         radius,
         health: randInt(60,100),
         stamina: 100,
+        staminaLocked: false,
         strength: randInt(5,20),
         agility: randInt(5,20),
         aggressiveness: randRange(0,1),
@@ -240,6 +241,23 @@ $(function(){
       ctx.fillStyle = "#ffffff";
       ctx.fillRect(p.x-barW/2, offsetY, barW*staminaRatio, barH);
     });
+
+    // love lines
+    players.forEach(p=>{
+      if(p.lovePartnerId != null){
+        const partner = players.find(o=>o.id===p.lovePartnerId);
+        if(partner){
+          ctx.save();
+          ctx.strokeStyle = "#ff66cc";
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(p.x, p.y);
+          ctx.lineTo(partner.x, partner.y);
+          ctx.stroke();
+          ctx.restore();
+        }
+      }
+    });
   }
 
   function drawSpells(){
@@ -288,8 +306,10 @@ $(function(){
     });
 
     if(running && players.length>1 && mushroomIntervalTicks>0){
-      if(globalTick % mushroomIntervalTicks === 0){
-        spawnMushrooms(randInt(1,3));
+      const aliveCount = mushrooms.filter(m=>m.alive).length;
+      if(aliveCount < 10 && globalTick % mushroomIntervalTicks === 0){
+        const canSpawn = 10 - aliveCount;
+        spawnMushrooms(randInt(1, Math.max(1, canSpawn)));
       }
     }
   }
@@ -305,6 +325,7 @@ $(function(){
         if(s.heightOffset >= 40) s.phase = "seek";
       } else {
         const target = players.find(p=>p.id===s.targetId);
+        const caster = players.find(p=>p.id===s.sourceId);
         if(!target){
           s.active = false;
           return;
@@ -320,7 +341,7 @@ $(function(){
 
         if(dist < target.radius + s.size*0.5){
           if(!target.isStealthed){
-            applyDamageDirect(target, randInt(10,25));
+            applyDamageDirect(target, randInt(10,25), caster);
           }
           s.active = false;
         }
@@ -349,21 +370,30 @@ $(function(){
 
     if(attacker.isEnraged) dmg *= 0.25;
 
-    applyDamageDirect(defender, dmg);
+    applyDamageDirect(defender, dmg, attacker);
     attacker.stamina -= 0.5;
   }
 
-  function applyDamageDirect(defender, dmg){
+  function applyDamageDirect(defender, dmg, attacker){
     if(defender.lovePartnerId != null){
       const partner = players.find(p=>p.id === defender.lovePartnerId);
       if(partner){
         const half = dmg * 0.5;
         defender.health -= half;
         partner.health -= half;
-        return;
+      } else {
+        defender.health -= dmg;
+      }
+    } else {
+      defender.health -= dmg;
+    }
+
+    if(attacker && defender.lovePartnerId == null && attacker.lovePartnerId == null){
+      if(Math.random() < 0.3){
+        defender.lovePartnerId = attacker.id;
+        attacker.lovePartnerId = defender.id;
       }
     }
-    defender.health -= dmg;
   }
 
   function castSpell(caster, target){
@@ -378,6 +408,7 @@ $(function(){
       heightOffset: 0,
       angle: 0,
       targetId: target.id,
+      sourceId: caster.id,
       shadow: { x: caster.x, y: caster.y },
       shadowSize: 10
     });
@@ -390,23 +421,31 @@ $(function(){
       }
 
       if(staminaDrainIntervalTicks>0 && globalTick % staminaDrainIntervalTicks === 0){
-        if(p.stamina > 0){
+        if(!p.staminaLocked && p.stamina > 0){
           p.stamina -= (p.speedFactor * 2);
         }
       }
 
-      if(p.stamina < 10){
+      if(p.stamina <= 10){
+        p.staminaLocked = true;
+      }
+
+      if(p.staminaLocked){
         if(staminaRegenIntervalTicks>0 && globalTick % staminaRegenIntervalTicks === 0){
           p.stamina += 10;
         }
+        if(p.stamina >= 100){
+          p.stamina = 100;
+          p.staminaLocked = false;
+        }
+      } else {
+        if(p.stamina > 100) p.stamina = 100;
+        if(p.stamina < 0) p.stamina = 0;
       }
-
-      if(p.stamina > 100) p.stamina = 100;
-      if(p.stamina < 0) p.stamina = 0;
 
       let speed = (1 + p.agility/40) * p.speedFactor;
 
-      if(p.stamina <= 10){
+      if(p.staminaLocked){
         speed = 0;
       } else if(p.stamina <= 50){
         speed *= 0.75;
@@ -542,17 +581,8 @@ $(function(){
         }
 
         if(dist < minDist){
-          const loveChance = Math.random();
-          const canLoveA = (a.lovePartnerId === null);
-          const canLoveB = (b.lovePartnerId === null);
-
-          if(loveChance < 0.3 && canLoveA && canLoveB){
-            a.lovePartnerId = b.id;
-            b.lovePartnerId = a.id;
-          } else {
-            if(aCanSee) applyDamage(a,b);
-            if(bCanSee) applyDamage(b,a);
-          }
+          if(aCanSee) applyDamage(a,b);
+          if(bCanSee) applyDamage(b,a);
 
           const overlap = minDist - dist || 0.01;
           const nx = dx / dist;
